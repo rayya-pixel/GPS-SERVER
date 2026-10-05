@@ -3,14 +3,17 @@ const net = require('net');
 
 let gps = { lat: 3.3616128, lng: 114.0850688, time: new Date().toISOString() };
 let history = [gps];
-const PORT = process.env.PORT || 3000;
 
-// TCP buat FMB910 - jangan dihapus
+const WEB_PORT = process.env.PORT || 3000;
+let TCP_PORT = 5000;
+if (parseInt(WEB_PORT) === 5000) TCP_PORT = 5001; // hindari tabrakan
+
+// TCP FMB910
 const tcp = net.createServer((sock) => {
   console.log('FMB910 CONNECT');
   sock.on('data', (d) => {
     try {
-      sock.write(Buffer.from([0x01])); // ACK wajib teltonika
+      sock.write(Buffer.from([0x01]));
       if (d.length > 50) {
         let lat = d.readInt32BE(d.length - 22) / 1e7;
         let lng = d.readInt32BE(d.length - 26) / 1e7;
@@ -18,23 +21,25 @@ const tcp = net.createServer((sock) => {
           gps = { lat, lng, time: new Date().toISOString() };
           history.push(gps);
           if (history.length > 200) history.shift();
-          console.log('GPS UPDATE:', lat, lng);
+          console.log('GPS:', lat, lng);
         }
       }
     } catch (e) {}
   });
+  sock.on('error', () => {});
 });
-tcp.listen(5000, '0.0.0.0', () => console.log('TCP 5000 READY'));
+tcp.on('error', (e) => { console.log('TCP ERR '+e.message+' coba port lain'); if(TCP_PORT===5000){ TCP_PORT=5001; try{tcp.listen(TCP_PORT,'0.0.0.0')}catch{}} });
+tcp.listen(TCP_PORT, '0.0.0.0', () => console.log('TCP READY ON '+TCP_PORT));
 
-// WEB PETA
+// WEB
 const web = http.createServer((req, res) => {
   if (req.url === '/api') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify({ lat: gps.lat, lng: gps.lng, time: gps.time, history }));
+    res.end(JSON.stringify({ lat: gps.lat, lng: gps.lng, time: gps.time, history, tcp_port: TCP_PORT }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FMB910 LIVE</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script><style>body{margin:0;background:#111;color:#fff;font-family:sans-serif}#map{height:82vh}.top{padding:12px;background:#1e1e1e;border-bottom:3px solid #00ff88;display:flex;justify-content:space-between;flex-wrap:wrap}.badge{background:#00ff88;color:#000;padding:4px 12px;border-radius:20px;font-weight:900}.info{background:#222;padding:10px;display:flex;gap:14px;flex-wrap:wrap}</style></head><body><div class="top"><div>🛰️ FMB910 <span class="badge">ONLINE</span></div><div id="clock"></div></div><div class="info"><div>Lat:<b id="lat">-</b></div><div>Lng:<b id="lng">-</b></div><div id="tm"></div><div>Point:<b id="cnt">0</b></div><div><a id="gm" target="_blank" style="color:#0f8">Google Maps</a></div></div><div id="map"></div><script>let map=L.map('map').setView([3.3616,114.0850],16);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);let mk=L.marker([3.3616,114.0850]).addTo(map);let pl=L.polyline([],{color:'#00ff88',weight:5}).addTo(map);async function ref(){let r=await fetch('/api');let d=await r.json();document.getElementById('lat').innerText=d.lat.toFixed(7);document.getElementById('lng').innerText=d.lng.toFixed(7);document.getElementById('tm').innerText=new Date(d.time).toLocaleString('id-ID');document.getElementById('cnt').innerText=d.history.length;document.getElementById('gm').href='https://maps.google.com/?q='+d.lat+','+d.lng;mk.setLatLng([d.lat,d.lng]);pl.setLatLngs(d.history.map(h=>[h.lat,h.lng]));map.panTo([d.lat,d.lng]);}setInterval(ref,3000);ref();setInterval(()=>document.getElementById('clock').innerText=new Date().toLocaleString('id-ID'),1000);<\/script></body></html>`);
+  res.end('<h1>ONLINE V6 - TCP '+TCP_PORT+'</h1><p>Web:'+WEB_PORT+'</p><p>GPS: '+gps.lat+','+gps.lng+'</p><p><a href="/api">API</a></p><p>Peta full akan aktif setelah ini hijau</p>');
 });
-
-web.listen(PORT, '0.0.0.0', () => console.log('WEB READY on '+PORT));
+web.on('error', (e) => console.log('WEB ERR '+e.message));
+web.listen(WEB_PORT, '0.0.0.0', () => console.log('WEB READY '+WEB_PORT));
